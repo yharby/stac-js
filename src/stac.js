@@ -4,6 +4,11 @@ import Asset from './asset.js';
 import STACHypermedia from './hypermedia.js';
 import { getBest } from './locales.js';
 
+const isSvg = (img) =>
+  hasText(img.type)
+    ? isMediaType(img.type, 'image/svg+xml')
+    : typeof img.href === 'string' && /\.svg$/i.test(img.href.split(/[?#]/)[0]);
+
 /**
  * Class for STAC spec entities (Item, Catalog and Collection).
  *
@@ -88,6 +93,9 @@ class STAC extends STACHypermedia {
    * the first alternate asset that a browser can show is returned instead.
    * Such an asset is merged with the metadata of its parent asset (see
    * `Asset.fillAlternate`) and `getContext()` returns the parent asset.
+   * SVG assets are also replaced with a raster alternate asset, if available.
+   *
+   * SVG images are sorted after raster images.
    *
    * @param {boolean} browserOnly - Return only images that can be shown in a browser natively (PNG/JPG/GIF/WEBP + HTTP/S).
    * @param {string|null} prefer - If not `null` (default), prefers a role over the other. Either `thumbnail` or `overview`.
@@ -115,15 +123,21 @@ class STAC extends STACHypermedia {
       // See https://github.com/radiantearth/stac-browser/issues/910
       thumbnails = thumbnails
         .map((img) => {
-          if (img.canBrowserDisplayImage()) {
+          if (img.canBrowserDisplayImage() && !isSvg(img)) {
             return img;
-          } else if (img.isAsset) {
-            return img.getAlternates(true).find((alt) => alt.canBrowserDisplayImage()) || null;
           }
-          return null;
+          // Prefer a raster alternate over an SVG or non-displayable asset
+          const alternates = img.isAsset ? img.getAlternates(true).filter((alt) => alt.canBrowserDisplayImage()) : [];
+          const raster = alternates.find((alt) => !isSvg(alt));
+          if (raster) {
+            return raster;
+          }
+          return img.canBrowserDisplayImage() ? img : alternates[0] || null;
         })
         .filter((img) => img !== null);
     }
+    // Sort SVG images after raster images (two filters for a stable order)
+    thumbnails = thumbnails.filter((img) => !isSvg(img)).concat(thumbnails.filter(isSvg));
     if (prefer && thumbnails.length > 1) {
       // Prefer one role over the other.
       // The two step approach with two filters ensures the same sort bevahiour across all browsers:
